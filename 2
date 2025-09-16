@@ -1,0 +1,44 @@
+-- 1. Create the Profit column if it doesn't already exist.
+ALTER TABLE Order_Facts ADD COLUMN IF NOT EXISTS profit DECIMAL(10, 2);
+
+-- 2. Create the trigger function to calculate profit before insertion.
+CREATE OR REPLACE FUNCTION calculate_profit()
+RETURNS TRIGGER AS $$
+DECLARE
+    product_cost DECIMAL(10, 2);
+BEGIN
+    -- Look up the cost for the product from products_dim.
+    SELECT Cost INTO product_cost
+    FROM products_dim
+    WHERE "Product ID" = NEW."Product ID";
+
+    -- Calculate the profit using the provided formula and assign it to the new row's profit column.
+    NEW.profit := NEW.Sales - (NEW.Sales * NEW.Discount) - (NEW.quantity * product_cost);
+
+    -- The trigger returns the modified row for insertion.
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. Create the BEFORE INSERT trigger on Order_Facts.
+CREATE TRIGGER tr_calculate_profit
+BEFORE INSERT ON Order_Facts
+FOR EACH ROW
+EXECUTE FUNCTION calculate_profit();
+
+-- 4. Demonstration of the trigger in action.
+
+-- Fictitious initial data for demonstration
+INSERT INTO products_dim ("Product ID", Cost) VALUES ('PROD-C', 150.00);
+
+-- Insert a new order without providing a value for the profit column.
+-- The formula for this transaction should be: 500 - (500 * 0.20) - (2 * 150) = 500 - 100 - 300 = 100.
+INSERT INTO Order_Facts ("Order ID", "Product ID", Sales, Discount, quantity)
+VALUES ('ORD-103', 'PROD-C', 500.00, 0.20, 2);
+
+-- Show that the profit column was correctly populated by the trigger.
+SELECT "Order ID", "Product ID", Sales, Discount, quantity, profit
+FROM Order_Facts WHERE "Order ID" = 'ORD-103';
+-- Expected Output:
+-- Order ID | Product ID | Sales | Discount | quantity | profit
+-- ORD-103  | PROD-C     | 500.00| 0.20     | 2        | 100.00
