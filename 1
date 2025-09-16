@@ -1,0 +1,58 @@
+-- 1. Create the stocklevel column if it doesn't already exist.
+ALTER TABLE products_dim ADD COLUMN IF NOT EXISTS stocklevel INTEGER DEFAULT 100;
+
+-- 2. Create the trigger function to handle inventory updates.
+CREATE OR REPLACE FUNCTION update_inventory()
+RETURNS TRIGGER AS $$
+DECLARE
+    current_stock INTEGER;
+BEGIN
+    -- Decrement stock in products_dim for the product in the new order.
+    UPDATE products_dim
+    SET stocklevel = stocklevel - NEW.quantity
+    WHERE product_id = NEW."Product ID";
+
+    -- Get the updated stock level for the notice.
+    SELECT stocklevel INTO current_stock
+    FROM products_dim
+    WHERE product_id = NEW."Product ID";
+
+    -- Alert management if stock drops below 10 units.
+    IF current_stock < 10 THEN
+        RAISE NOTICE 'CRITICAL STOCK ALERT: Product ID % has dropped to % units.', NEW."Product ID", current_stock;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. Create the trigger to fire after an INSERT on Order_Facts.
+CREATE TRIGGER tr_update_inventory
+AFTER INSERT ON Order_Facts
+FOR EACH ROW
+EXECUTE FUNCTION update_inventory();
+
+-- 4. Demonstration of the trigger in action.
+
+-- Fictitious initial data for demonstration
+INSERT INTO products_dim ("Product ID", stocklevel) VALUES ('PROD-A', 15);
+INSERT INTO products_dim ("Product ID", stocklevel) VALUES ('PROD-B', 50);
+
+-- Show initial stock levels.
+SELECT "Product ID", stocklevel FROM products_dim WHERE "Product ID" IN ('PROD-A', 'PROD-B');
+-- Expected Output:
+-- Product ID | stocklevel
+-- PROD-A     | 15
+-- PROD-B     | 50
+
+-- Insert a new order that will fire the trigger and reduce stock.
+INSERT INTO Order_Facts ("Order ID", "Product ID", quantity) VALUES ('ORD-101', 'PROD-A', 7);
+-- A RAISE NOTICE message will be triggered for 'PROD-A' because 15 - 7 = 8, which is < 10.
+INSERT INTO Order_Facts ("Order ID", "Product ID", quantity) VALUES ('ORD-102', 'PROD-B', 10);
+
+-- Show the updated stock levels after the sales.
+SELECT "Product ID", stocklevel FROM products_dim WHERE "Product ID" IN ('PROD-A', 'PROD-B');
+-- Expected Output:
+-- Product ID | stocklevel
+-- PROD-A     | 8
+-- PROD-B     | 40
