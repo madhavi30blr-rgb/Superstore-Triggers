@@ -1,0 +1,67 @@
+-- Scenario 3: Cross-Table Order Status Management
+-- Business Problem: Automatically update order status when all items are returned.
+
+-- 1. Create the Orders and Returns tables if they don't exist.
+CREATE TABLE IF NOT EXISTS Orders (
+    "Order ID" VARCHAR(20) PRIMARY KEY,
+    "Order Status" VARCHAR(20) NOT NULL,
+    "Total Quantity" INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS Returns (
+    return_id VARCHAR(20) PRIMARY KEY,
+    "Order ID" VARCHAR(20) REFERENCES Orders("Order ID"),
+    item_quantity INTEGER NOT NULL
+);
+
+-- 2. Create the trigger function to update the order status.
+CREATE OR REPLACE FUNCTION update_order_status()
+RETURNS TRIGGER AS $$
+DECLARE
+    returned_items_count INTEGER;
+    total_order_quantity INTEGER;
+BEGIN
+    -- Sum the quantities of all returned items for the order.
+    SELECT SUM(item_quantity) INTO returned_items_count
+    FROM Returns
+    WHERE "Order ID" = NEW."Order ID";
+
+    -- Get the total original quantity from the Orders table.
+    SELECT "Total Quantity" INTO total_order_quantity
+    FROM Orders
+    WHERE "Order ID" = NEW."Order ID";
+
+    -- If the returned quantity meets or exceeds the total quantity, update the status.
+    IF returned_items_count >= total_order_quantity THEN
+        UPDATE Orders
+        SET "Order Status" = 'Returned'
+        WHERE "Order ID" = NEW."Order ID";
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. Create the trigger to fire AFTER an INSERT on the Returns table.
+CREATE TRIGGER tr_update_order_status
+AFTER INSERT ON Returns
+FOR EACH ROW
+EXECUTE FUNCTION update_order_status();
+
+-- Demonstration Steps
+-- Initial INSERT statements for a sample order with status 'Shipped'.
+INSERT INTO Orders ("Order ID", "Order Status", "Total Quantity") VALUES ('ORD-104', 'Shipped', 5);
+
+-- Show the initial order status.
+SELECT "Order ID", "Order Status", "Total Quantity" FROM Orders WHERE "Order ID" = 'ORD-104';
+
+-- Insert a partial return for the order.
+INSERT INTO Returns (return_id, "Order ID", item_quantity) VALUES ('RET-101', 'ORD-104', 3);
+-- The trigger fires, but the status remains 'Shipped' because the return is not complete.
+
+-- Insert the final part of the return.
+INSERT INTO Returns (return_id, "Order ID", item_quantity) VALUES ('RET-102', 'ORD-104', 2);
+-- The trigger fires again, and this time the order status will be updated to 'Returned'.
+
+-- Show the final updated order status.
+SELECT "Order ID", "Order Status", "Total Quantity" FROM Orders WHERE "Order ID" = 'ORD-104';
